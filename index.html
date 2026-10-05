@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HDR Emergency Simulator</title>
+<meta name="description" content="Virtual reality training for HDR brachytherapy source retraction emergencies.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23f6c90e'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%237a0070'/%3E%3Cpath d='M32 32 L19 9.5 A26 26 0 0 1 45 9.5Z M32 32 L58 32 A26 26 0 0 1 45 54.5Z M32 32 L19 54.5 A26 26 0 0 1 6 32Z' fill='%237a0070' transform='rotate(0 32 32)'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0b0e12; --panel: #141a21; --panel2: #1b232c; --line: #2a3541; --text: #e8edf2; --muted: #93a1b0;
+    --accent: #f2c21b; --danger: #e5484d; --ok: #3fb67a; --blue: #4c8dff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: radial-gradient(1200px 700px at 70% 20%, rgba(242,194,27,0.08), transparent 60%), rgba(8,10,13,0.86);
+    backdrop-filter: blur(6px); z-index: 10; }
+  .overlay.hidden { display: none; }
+  .card { width: min(980px, 100%); max-height: calc(100vh - 32px); overflow: auto; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 30px 80px rgba(0,0,0,0.5); }
+  .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 0; }
+  @media (max-width: 820px) { .hero { grid-template-columns: 1fr; } }
+  .hero-l { padding: 28px 28px 24px; border-right: 1px solid var(--line); }
+  @media (max-width: 820px) { .hero-l { border-right: 0; border-bottom: 1px solid var(--line); } }
+  .hero-r { padding: 24px 28px 28px; background: var(--panel2); border-radius: 0 16px 16px 0; }
+  .badge { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+    color: #1a1400; background: var(--accent); padding: 4px 10px; border-radius: 999px; font-weight: 700; }
+  h1 { font-size: 30px; line-height: 1.15; margin: 14px 0 8px; letter-spacing: -0.01em; }
+  p.lead { color: var(--muted); margin: 0 0 18px; }
+  .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 18px 0; }
+  .fact { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .fact b { display: block; font-size: 18px; }
+  .fact span { color: var(--muted); font-size: 12px; }
+  .controls h3, .hero-r h3 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; color: var(--muted); }
+  .keys kbd { font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); background: #0f1419;
+    border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 3px 6px; white-space: nowrap; justify-self: start; align-self: start; }
+  label.field { display: block; margin: 0 0 12px; }
+  label.field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  select, .seg button { width: 100%; background: #0f1419; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 10px; font: inherit; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .seg.three { grid-template-columns: 1fr 1fr 1fr; }
+  .seg button { cursor: pointer; }
+  .seg button.on { border-color: var(--accent); color: var(--accent); background: rgba(242,194,27,0.08); }
+  .desc { font-size: 12.5px; color: var(--muted); min-height: 54px; margin: -4px 0 12px; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+  .btn { appearance: none; border: 0; border-radius: 10px; padding: 13px 14px; font-family: inherit; font-weight: 700; font-size: 15px; line-height: 1; cursor: pointer; }
+  .btn.vr { background: var(--accent); color: #1a1400; }
+  .btn.vr[disabled] { background: #3a3a2a; color: #8b8670; cursor: not-allowed; }
+  .btn.desk { background: #263240; color: var(--text); border: 1px solid #344456; }
+  .btn:hover:not([disabled]) { filter: brightness(1.08); }
+  .note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .progress { height: 4px; background: #0f1419; border-radius: 4px; overflow: hidden; margin-top: 14px; }
+  .progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  #loadtxt { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  /* HUD (desktop) */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; display: none; }
+  #hud.on { display: block; }
+  #cross { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); }
+  #cross::before, #cross::after { content: ""; position: absolute; background: rgba(255,255,255,0.85); box-shadow: 0 0 2px #000; }
+  #cross::before { left: 10px; top: 4px; width: 2px; height: 14px; }
+  #cross::after { top: 10px; left: 4px; height: 2px; width: 14px; }
+  #cross.hot::before, #cross.hot::after { background: var(--accent); }
+  #tip { position: absolute; left: 50%; top: calc(50% + 22px); transform: translateX(-50%); background: rgba(10,12,16,0.75);
+    border: 1px solid rgba(255,255,255,0.12); padding: 5px 10px; border-radius: 8px; font-size: 13px; white-space: nowrap; display: none; }
+  #hint { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%); max-width: min(760px, 92vw); text-align: center;
+    background: rgba(10,12,16,0.78); border: 1px solid rgba(242,194,27,0.35); padding: 9px 14px; border-radius: 10px; font-size: 14px; display: none; }
+  #sub { position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); max-width: min(760px, 92vw); text-align: center;
+    font-size: 16px; color: #fff; text-shadow: 0 1px 3px #000, 0 0 10px #000; display: none; }
+  #epd { position: absolute; right: 16px; top: 16px; width: 210px; background: rgba(12,15,19,0.82); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px; padding: 10px 12px; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #epd .row { display: flex; justify-content: space-between; }
+  #epd .big { font-size: 20px; font-weight: 700; }
+  #epd .lbl { color: var(--muted); }
+  #held { position: absolute; left: 16px; bottom: 16px; font-size: 13px; color: var(--muted); background: rgba(10,12,16,0.7);
+    padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); }
+  #pausehint { position: absolute; left: 16px; top: 16px; font-size: 12px; color: var(--muted); background: rgba(10,12,16,0.6);
+    padding: 6px 10px; border-radius: 8px; }
+  /* debrief */
+  .debrief { padding: 24px 28px; }
+  .debrief h2 { margin: 0 0 4px; font-size: 24px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  @media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+  .box { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .box h3 { margin: 0 0 10px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .stat { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #2a3541; font-size: 14px; }
+  .stat:last-child { border-bottom: 0; }
+  .chk { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; padding: 5px 0; font-size: 14px; align-items: start; }
+  .chk .t { color: var(--muted); font: 12px ui-monospace, monospace; }
+  .ok { color: var(--ok); } .bad { color: var(--danger); } .warn { color: var(--accent); }
+  .score { font-size: 44px; font-weight: 800; line-height: 1; }
+  .teach { margin-top: 16px; font-size: 14px; color: #c9d3dc; }
+  .teach p { margin: 6px 0; }
+  canvas.chart { width: 100%; height: 140px; background: #0f1419; border-radius: 8px; border: 1px solid var(--line); }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/build/three.module.min.js",
+  "three/addons/": "./vendor/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud">
+  <div id="cross"></div>
+  <div id="tip"></div>
+  <div id="hint"></div>
+  <div id="sub"></div>
+  <div id="epd"></div>
+  <div id="held"></div>
+  <div id="pausehint">Esc to release the mouse · Tab for the procedure card</div>
+</div>
+
+<div class="overlay" id="menu">
+  <div class="card">
+    <div class="hero">
+      <div class="hero-l">
+        <span class="badge">HDR brachytherapy · Ir-192</span>
+        <h1>Source retraction emergency</h1>
+        <p class="lead">You are the physicist at the console during a vaginal cylinder fraction. Partway through, the source does not come home. Bring it back, or get it out of the patient, while keeping your own dose as low as you can.</p>
+        <div class="facts">
+          <div class="fact"><b id="f-act">10.0 Ci</b><span>source activity</span></div>
+          <div class="fact"><b id="f-rate">7.6 Gy/min</b><span>at 1 cm in tissue</span></div>
+          <div class="fact"><b id="f-air">41 mGy/h</b><span>air kerma at 1 m</span></div>
+        </div>
+        <div class="controls">
+          <h3>Desktop controls</h3>
+          <div class="keys">
+            <kbd>W A S D</kbd><span>walk (Shift to hurry)</span>
+            <kbd>Mouse</kbd><span>look</span>
+            <kbd>Left click</kbd><span>press, pick up, use. Hold to crank, pull or turn</span>
+            <kbd>F</kbd><span>survey meter on/off while holding it</span>
+            <kbd>G</kbd><span>put down what you are holding</span>
+            <kbd>Tab</kbd><span>procedure card</span>
+          </div>
+          <h3 style="margin-top:14px">In VR</h3>
+          <div class="keys">
+            <kbd>Grip</kbd><span>grab, crank, open the door, pull the applicator</span>
+            <kbd>Fingertip / trigger</kbd><span>press buttons</span>
+            <kbd>Left stick</kbd><span>teleport or move · right stick turns</span>
+            <kbd>A / X</kbd><span>survey meter on/off while holding it</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-r">
+        <h3>Session</h3>
+        <label class="field"><span>Scenario</span>
+          <select id="opt-scn"></select>
+        </label>
+        <div class="desc" id="scn-desc"></div>
+        <label class="field"><span>Mode</span>
+          <div class="seg" id="opt-mode"><button data-v="guided" class="on">Guided practice</button><button data-v="assess">Assessment</button></div>
+        </label>
+        <label class="field"><span>Source activity</span>
+          <div class="seg three" id="opt-act"><button data-v="10" class="on">10 Ci (new)</button><button data-v="6.5">6.5 Ci</button><button data-v="4">4 Ci (old)</button></div>
+        </label>
+        <label class="field"><span>Survey meter units</span>
+          <div class="seg" id="opt-unit"><button data-v="mR" class="on">mR/h</button><button data-v="uSv">µSv/h</button></div>
+        </label>
+        <label class="field"><span>VR movement</span>
+          <div class="seg" id="opt-loco"><button data-v="teleport" class="on">Teleport</button><button data-v="smooth">Smooth</button></div>
+        </label>
+        <div class="actions">
+          <button class="btn vr" id="btn-vr" disabled>Enter VR</button>
+          <button class="btn desk" id="btn-desk" disabled>Start on desktop</button>
+        </div>
+        <div class="progress"><i id="bar"></i></div>
+        <div id="loadtxt">Loading the treatment suite…</div>
+        <div class="note" id="xrnote"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay hidden" id="debrief"><div class="card"><div class="debrief" id="debrief-body"></div></div></div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
