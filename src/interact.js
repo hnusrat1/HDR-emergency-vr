@@ -6,6 +6,16 @@ import { B } from './dose.js';
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const _box = new THREE.Box3();
 const ray = new THREE.Raycaster();
+const _sweep = new THREE.Ray(), _sv = new THREE.Vector3();
+
+// true if the straight path a -> b passes through box (catches fast pokes between frames)
+function sweepHitsBox(a, b, box) {
+  const len = a.distanceTo(b);
+  if (len < 1e-4 || len > 0.5) return false;
+  _sweep.origin.copy(a); _sweep.direction.subVectors(b, a).divideScalar(len);
+  const p = _sweep.intersectBox(box, _sv);
+  return !!p && p.distanceTo(a) <= len;
+}
 
 export class Interact {
   constructor(world, player, audio, events) {
@@ -173,6 +183,65 @@ export class Interact {
     }
   }
 
+  pressables() {
+    const out = [];
+    for (const k of Object.values(this.btn)) if (k && k.enabled()) out.push(k);
+    if (this.key && this.key.enabled()) out.push(this.key);
+    return out;
+  }
+
+  // Controller ray against the buttons' boxes (padded so a small button is easy to hit).
+  // The occlusion raycast against the room is the expensive part, so it runs when the
+  // target changes, on a trigger pull, and a few times a second otherwise.
+  aimButton(h) {
+    ray.set(h.rayO, h.rayD);
+    let best = null;
+    for (const k of this.pressables()) {
+      _box.setFromObject(k.obj).expandByScalar(0.012);
+      const p = ray.ray.intersectBox(_box, _v);
+      if (!p) continue;
+      const dist = p.distanceTo(h.rayO);
+      if (dist > 2.5 || (best && dist >= best.dist)) continue;
+      best = { k, dist };
+    }
+    if (!best) { h._aim = null; return null; }
+    const c = h._aim || (h._aim = { k: null, t: 0, blocked: false });
+    c.t -= 1;
+    if (c.k !== best.k || c.t <= 0 || h.triggerDown) {
+      ray.far = best.dist;
+      const occ = ray.intersectObjects(this.world.colliders, false)[0];
+      ray.far = Infinity;
+      c.blocked = !!(occ && occ.distance < best.dist - 0.03);
+      c.k = best.k; c.t = 8;
+    }
+    return c.blocked ? null : best;
+  }
+
+  showButtonRing(i, k) {
+    this._rings = this._rings || [];
+    let r = this._rings[i];
+    if (!r) {
+      r = new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 40), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide, toneMapped: false }));
+      r.renderOrder = 10; r.visible = false;
+      this.world.scene.add(r);
+      this._rings[i] = r;
+    }
+    this._ringSeen = this._ringSeen || new Set();
+    this._ringSeen.add(i);
+    if (!k) { r.visible = false; return; }
+    _box.setFromObject(k.obj);
+    const s = _box.getSize(_v2);
+    r.scale.setScalar(Math.max(s.x, s.y, s.z) * 0.5 + 0.01);
+    r.position.copy(_box.getCenter(_v));
+    r.lookAt(this.player.headWorld(_v2));
+    r.visible = true;
+  }
+
+  hideUnusedRings() {
+    for (const [i, r] of (this._rings || []).entries()) if (r && !(this._ringSeen && this._ringSeen.has(i))) r.visible = false;
+    if (this._ringSeen) this._ringSeen.clear();
+  }
+
   canGrab(it) { return it.enabled() && !(it.grabbedBy); }
 
   attach(it, handKey, handMatrix) {
@@ -257,7 +326,7 @@ export class Interact {
       if (f.it.obj.position.y <= f.y) { f.it.obj.position.y = f.y; this.audio.oneShot('tick', f.it.obj.position, 0.6); return false; }
       return true;
     });
-    if (this.player.mode === 'xr') this.updateXR(dt); else this.updateDesktop(dt);
+    if (this.player.mode === 'xr') this.updateXR(dt); else { this.hideUnusedRings(); this.updateDesktop(dt); }
     if (this.app) this.constrainTube();
   }
 
@@ -302,7 +371,7 @@ export class Interact {
   updateXR(dt) {
     let haloAt = null;
     for (const h of this.player.hands) {
-      if (!h.active) continue;
+      if (!h.active) { h._lastTip = null; continue; }
       const key = 'h' + h.i;
       const held = this.held.get(key);
       // --- holding something
@@ -319,21 +388,33 @@ export class Interact {
         else if (it.kind === 'applicator') this.pullFromHand(it, h, held);
         continue;
       }
-      // --- poke buttons with fingertip
-      for (const k of [...Object.values(this.btn), this.key]) {
-        if (!k || !k.enabled()) continue;
-        const c = this.center(k, _v);
-        const d = c.distanceTo(h.tip);
-        if (d < 0.024 && !k._armed) { k._armed = true; this.press(k, 'poke'); this.player.haptic(h, 0.6, 40); }
-        if (d > 0.05) k._armed = false;
+      // --- poke buttons: fingertip for hands; tip marker or controller nose for controllers.
+      // Distance is measured to the button's box, not its center, so tall mushroom caps
+      // register on contact, and the tip's path since last frame is swept so a quick jab counts.
+      const pokeTol = h.isHand ? 0.008 : 0.012;
+      if (!h._lastTip) h._lastTip = h.tip.clone();
+      let near = null;
+      for (const k of this.pressables()) {
+        _box.setFromObject(k.obj);
+        let d = _box.distanceToPoint(h.tip);
+        if (!h.isHand) d = Math.min(d, _box.distanceToPoint(h.rayO));
+        if (d > pokeTol && sweepHitsBox(h._lastTip, h.tip, _box)) d = 0;
+        const arm = k._arm || (k._arm = {});
+        if (d <= pokeTol && !arm[h.i]) { arm[h.i] = true; this.press(k, 'poke'); this.player.haptic(h, 0.7, 45); }
+        if (d > 0.04) arm[h.i] = false;
+        if (d < 0.06 && (!near || d < near.d)) near = { k, d };
       }
-      // --- ray + trigger for buttons at a distance (comfort)
-      if (h.triggerDown && !h.isHand) {
-        ray.set(h.rayO, h.rayD); ray.far = 1.6;
-        const objs = [...Object.values(this.btn), this.key].filter(Boolean).map(k => k.obj);
-        const hit = ray.intersectObjects(objs, true)[0];
-        if (hit) { const it = hit.object.userData.item; if (it) { this.press(it, 'ray'); this.player.haptic(h, 0.5, 30); } }
+      h._lastTip.copy(h.tip);
+      // --- point and pull the trigger (controllers): visible laser and a ring on the target
+      let aim = null;
+      if (!h.isHand) {
+        aim = this.aimButton(h);
+        if (aim && !(h.uiDist < aim.dist)) {
+          h.ray.visible = true; h.ray.scale.z = aim.dist;
+          if (h.triggerDown) { this.press(aim.k, 'ray'); this.player.haptic(h, 0.6, 35); }
+        } else aim = null;
       }
+      this.showButtonRing(h.i, aim ? aim.k : near ? near.k : null);
       // --- grab
       const cand = this.nearest(h.pos, ['grab', 'crank', 'door', 'knob', 'applicator'], 0.14);
       if (cand) haloAt = haloAt || this.center(cand, new THREE.Vector3());
@@ -360,6 +441,7 @@ export class Interact {
     // show reach halo
     if (haloAt) { this.halo.visible = true; this.halo.position.copy(haloAt); this.halo.lookAt(this.player.headWorld(_v)); }
     else this.halo.visible = false;
+    this.hideUnusedRings();
   }
 
   // ---- crank: hand angle around crank axis

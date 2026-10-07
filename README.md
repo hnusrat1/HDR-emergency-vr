@@ -30,7 +30,7 @@ These are training approximations. They are not a shielding calculation and not 
 
 ## Controls
 
-**VR**: Grip grabs, cranks, opens the door and pulls the applicator. Touch a button with the yellow fingertip, or point at it and pull the trigger. Push the left stick forward to aim a teleport; the right stick snap-turns. A/X or the trigger turns the survey meter on and off while you hold it. B/Y opens the pause menu. Hand tracking works too: pinch or make a fist to grab.
+**VR**: Grip grabs, cranks, opens the door and pulls the applicator. Press a button by touching it with the yellow dot at the controller tip, or point at it from up to 2.5 m and pull the trigger. A laser and a white ring show which button you are aiming at. Push the left stick forward to aim a teleport; the right stick snap-turns. A/X or the trigger turns the survey meter on and off while you hold it. B/Y opens the pause menu. Hand tracking works too: pinch or make a fist to grab.
 
 **Desktop**: Use W A S D to walk and the mouse to look. Left click presses, picks up or uses; hold it to crank, pull or loosen. F turns the meter on or off. G puts down what you are holding. Tab shows the procedure card. Enter ends the drill.
 
@@ -39,6 +39,8 @@ These are training approximations. They are not a shielding calculation and not 
 1. Create a repository (for example `hdr-emergency-vr`) and push the contents of this folder to the default branch.
 2. In the repository, go to **Settings → Pages**. Set **Source** to *Deploy from a branch*, then choose the branch and the `/ (root)` folder.
 3. Open `https://<user>.github.io/hdr-emergency-vr/` in the Quest browser and press **Enter VR**.
+
+Add `?foveation=0.6` to the URL to trade some sharpness at the edge of view for GPU headroom on an older headset (the default is 0.2).
 
 WebXR needs HTTPS, which GitHub Pages provides. To test locally, run `python3 -m http.server` in this folder and open `http://localhost:8000`. VR on a headset needs HTTPS or `adb reverse`.
 

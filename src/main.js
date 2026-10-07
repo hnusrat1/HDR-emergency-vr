@@ -22,7 +22,9 @@ renderer.toneMapping = params.get('tm') === 'neutral' ? THREE.NeutralToneMapping
 renderer.toneMappingExposure = parseFloat(params.get('exposure') || '0.85');
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
-renderer.xr.setFoveation(0.6);
+// Fixed foveation renders the edge of view at reduced resolution, which made the text-heavy
+// console screens shimmer. Keep it low by default; ?foveation=0.6 trades sharpness for GPU time.
+renderer.xr.setFoveation(Math.min(1, Math.max(0, parseFloat(params.get('foveation') ?? '0.2'))));
 $('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -282,6 +284,7 @@ function simStep(dt) {
     for (const h of player.hands) {
       if (!h.active) { h.ray.visible = false; continue; }
       const r = ui.pickPanel(h.rayO, h.rayD);
+      h.uiDist = r ? r.dist : Infinity;   // lets console buttons behind a panel ignore this ray
       const over = !!(r && r.idx >= 0);
       h.ray.visible = !!r;
       if (r) h.ray.scale.z = r.dist;

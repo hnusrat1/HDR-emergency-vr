@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { fmtDoseRate, fmtDose, B, IR192 } from './dose.js';
 
+const _hv = new THREE.Vector3(), _hd = new THREE.Vector3(), _sv = new THREE.Vector3();
 const FONT = 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 const MONO = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
 
@@ -15,15 +16,24 @@ class Screen {
     this.tex = new THREE.CanvasTexture(this.canvas);
     this.tex.colorSpace = THREE.SRGBColorSpace;
     this.tex.flipY = false;
-    this.tex.anisotropy = 4;
-    const mat = new THREE.MeshBasicMaterial({ map: this.tex, toneMapped: false });
+    this.tex.anisotropy = opts.aniso || 8;
+    // polygon offset keeps the picture in front of the monitor face it sits 0.5-1 mm above
+    const mat = new THREE.MeshBasicMaterial({ map: this.tex, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
     if (opts.dim) mat.color.setScalar(opts.dim);
     mesh.traverse(o => { if (o.isMesh) o.material = mat; });
     this.mat = mat;
     this.w = w; this.h = h;
     this.every = opts.every || 0; this.acc = 0;
+    this.blinks = !!opts.blinks; this.tick = -1;
   }
-  due(dt) { this.acc += dt; if (this.acc >= this.every) { this.acc = 0; return true; } return false; }
+  // Redraw on its own period, and also on every blink half-period (tick) for screens with
+  // blinking elements, so a blink is never sampled at an unrelated rate (that read as flicker).
+  due(dt, tick) {
+    this.acc += dt;
+    if (this.blinks && tick !== this.tick) { this.tick = tick; this.acc = 0; return true; }
+    if (this.acc >= this.every) { this.acc -= this.every; if (this.acc > this.every) this.acc = 0; return true; }
+    return false;
+  }
   flush() { this.tex.needsUpdate = true; }
 }
 
@@ -43,15 +53,16 @@ export class Devices {
     this.crankProgress = 0;
     this.t = 0;
     const S = world.screens;
-    const mk = (n, w, h, o) => (S[n] ? new Screen(S[n], w, h, o) : null);
+    const aniso = renderer.capabilities.getMaxAnisotropy ? Math.min(16, renderer.capabilities.getMaxAnisotropy()) : 8;
+    const mk = (n, w, h, o) => (S[n] ? new Screen(S[n], w, h, Object.assign({ aniso }, o)) : null);
     this.scr = {
-      main: mk('SCREEN_console_main', 1024, 580, { every: 0.2 }),
+      main: mk('SCREEN_console_main', 1024, 580, { every: 0.5, blinks: true }),
       aux: mk('SCREEN_console_aux', 1024, 580, { every: 0.5 }),
-      armR: mk('SCREEN_arm_remote', 340, 160, { every: 0.1 }),
-      armV: mk('SCREEN_arm_room', 240, 120, { every: 0.1 }),
-      unit: mk('SCREEN_unit', 470, 200, { every: 0.15 }),
+      armR: mk('SCREEN_arm_remote', 340, 160, { every: 0.25, blinks: true }),
+      armV: mk('SCREEN_arm_room', 240, 120, { every: 0.25, blinks: true }),
+      unit: mk('SCREEN_unit', 470, 200, { every: 0.25, blinks: true }),
       vitals: mk('SCREEN_vitals', 600, 400, { every: 1 / 15 }),
-      meter: mk('SCREEN_meter', 290, 190, { every: 1 / 10 }),
+      meter: mk('SCREEN_meter', 290, 190, { every: 0.2, blinks: true }),
     };
     this.vitals = { hr: 82, spo2: 98, sys: 136, dia: 84, rr: 16, phase: 0, trace: new Float32Array(600).fill(0.5), x: 0 };
     // lights
@@ -111,36 +122,51 @@ export class Devices {
   meterDetector(out) { return out.set(0, -0.08, -0.12).applyMatrix4(this.meter.matrixWorld); }
 
   // ------------------------------------------------------------ CCTV
+  // Two feeds (main view and inset) in separate mipmapped render targets, composited in the
+  // screen shader. Each refresh renders one camera, alternating frames, so no frame pays for
+  // two extra scene renders, and nothing renders unless the monitor could be in view.
   setupCCTV() {
     const scr = this.world.screens['SCREEN_cctv'];
     if (!scr) return;
-    this.cctvRT = new THREE.WebGLRenderTarget(640, 360, { samples: 0, colorSpace: THREE.SRGBColorSpace });
+    const caps = this.renderer.capabilities;
+    const aniso = Math.min(8, caps.getMaxAnisotropy ? caps.getMaxAnisotropy() : 1);
+    const mkRT = (w, h) => {
+      const rt = new THREE.WebGLRenderTarget(w, h, { samples: 0, colorSpace: THREE.SRGBColorSpace,
+        generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter });
+      rt.texture.anisotropy = aniso;
+      return rt;
+    };
+    this.cctvRT = mkRT(640, 360);
+    this.cctvRT2 = mkRT(192, 122);
     this.cctvCams = [];
     for (const n of ['cam_cctv1', 'cam_cctv2']) {
       const m = this.world.markers[n];
       if (!m) continue;
-      const c = new THREE.PerspectiveCamera(n === 'cam_cctv1' ? 62 : 52, 640 / 360, 0.22, 20);
+      const main = n === 'cam_cctv1';
+      const c = new THREE.PerspectiveCamera(main ? 62 : 52, main ? 640 / 360 : 192 / 122, 0.22, 20);
       c.position.copy(m.position);
       const look = m.userData && Array.isArray(m.userData.look) ? m.userData.look : null;
       const target = look ? B(look[0], look[1], look[2]) : B(-0.3, 0.8, 0.9);
       c.lookAt(target);
       c.layers.enable(3);
+      c.updateMatrixWorld(); c.updateProjectionMatrix();
       this.cctvCams.push(c);
     }
     this.cctvOverlay = new Screen(new THREE.Object3D(), 640, 360);
     const mat = new THREE.ShaderMaterial({
-      uniforms: { tMain: { value: this.cctvRT.texture }, tOver: { value: this.cctvOverlay.tex }, uTime: { value: 0 } },
+      uniforms: { tMain: { value: this.cctvRT.texture }, tInset: { value: this.cctvRT2.texture }, tOver: { value: this.cctvOverlay.tex },
+        uInset: { value: new THREE.Vector4(440 / 640, 230 / 360, 192 / 640, 122 / 360) } },
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-      fragmentShader: `uniform sampler2D tMain; uniform sampler2D tOver; uniform float uTime; varying vec2 vUv;
-        float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233)))*43758.5453); }
+      fragmentShader: `uniform sampler2D tMain; uniform sampler2D tInset; uniform sampler2D tOver; uniform vec4 uInset; varying vec2 vUv;
         void main(){
           vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
-          vec3 c = texture2D(tMain, uv).rgb;
+          vec2 iuv = (uv - uInset.xy) / uInset.zw;
+          float m = step(0.0, iuv.x) * step(iuv.x, 1.0) * step(0.0, iuv.y) * step(iuv.y, 1.0);
+          vec3 c = mix(texture2D(tMain, uv).rgb, texture2D(tInset, clamp(iuv, 0.0, 1.0)).rgb, m);
           float l = dot(c, vec3(0.299,0.587,0.114));
           c = mix(vec3(l), c, 0.35);
-          c = pow(c, vec3(0.9)) * 1.12;
-          c += (hash(uv*vec2(640.,360.) + uTime) - 0.5) * 0.06;
-          c *= 0.92 + 0.08 * sin(uv.y * 900.0 + uTime * 8.0);
+          c = pow(c, vec3(0.9)) * 1.08;
           vec2 d = uv - 0.5; c *= 1.0 - dot(d,d)*0.9;
           vec4 o = texture2D(tOver, vUv);
           c = mix(c, o.rgb, o.a);
@@ -150,43 +176,40 @@ export class Devices {
     });
     scr.traverse(o => { if (o.isMesh) o.material = mat; });
     this.cctvMat = mat;
-    this.cctvAcc = 0;
+    this.cctvAcc = 1;
+    this.cctvInsetDue = false;
+  }
+
+  cctvInView() {
+    const head = this.player.headWorld(_hv);
+    if (head.z < 2.0) return false;                      // only from the control area or the door
+    const scr = this.world.screens['SCREEN_cctv'];
+    if (!scr) return false;
+    const to = scr.getWorldPosition(_sv).sub(head).normalize();
+    return to.dot(this.player.headDir(_hd)) > 0.2;       // within ~78 degrees of where the head points
   }
 
   renderCCTV(dt) {
     if (!this.cctvCams || !this.cctvCams.length) return;
     this.cctvAcc += dt;
-    this.cctvMat.uniforms.uTime.value += dt;
-    if (this.cctvAcc < 1 / 10) return;
-    this.cctvAcc = 0;
-    // only when someone could see it (player in control area or near the door)
-    const head = this.player.headWorld(new THREE.Vector3());
-    if (head.z < 2.0) return;
+    let cam, rt;
+    if (this.cctvInsetDue && this.cctvCams[1]) { cam = this.cctvCams[1]; rt = this.cctvRT2; this.cctvInsetDue = false; }
+    else if (this.cctvAcc >= 1 / 12 && this.cctvInView()) { cam = this.cctvCams[0]; rt = this.cctvRT; this.cctvAcc = 0; this.cctvInsetDue = true; }
+    else return;
     const r = this.renderer;
     const xr = r.xr.enabled; r.xr.enabled = false;
     const prevRT = r.getRenderTarget();
-    const tm = r.toneMapping;
-    const rt = this.cctvRT;
-    const [c1, c2] = this.cctvCams;
     const scrMesh = this.world.screens['SCREEN_cctv'];
     if (scrMesh) scrMesh.visible = false;
-    rt.scissorTest = true;
-    rt.viewport.set(0, 0, 640, 360); rt.scissor.set(0, 0, 640, 360);
     r.setRenderTarget(rt);
-    c1.aspect = 640 / 360; c1.updateProjectionMatrix();
-    r.render(this.scene, c1);
-    if (c2) {
-      rt.viewport.set(440, 230, 192, 122); rt.scissor.set(440, 230, 192, 122);
-      r.setRenderTarget(rt);
-      c2.aspect = 192 / 122; c2.updateProjectionMatrix();
-      r.render(this.scene, c2);
-    }
-    rt.scissorTest = false;
+    r.render(this.scene, cam);
     if (scrMesh) scrMesh.visible = true;
     r.setRenderTarget(prevRT);
     r.xr.enabled = xr;
-    r.toneMapping = tm;
-    // overlay text
+    if (cam === this.cctvCams[0]) this.drawCCTVOverlay();
+  }
+
+  drawCCTVOverlay() {
     const s = this.cctvOverlay, g = s.g;
     g.clearRect(0, 0, 640, 360);
     g.font = `600 16px ${MONO}`;
@@ -289,14 +312,14 @@ export class Devices {
     }
     // screens
     if (this.errFlash > 0) this.errFlash -= dt;
-    const S = this.scr;
-    if (S.main && S.main.due(dt)) this.drawMain(S.main, scenario);
-    if (S.aux && S.aux.due(dt)) this.drawAux(S.aux, scenario, dosim);
-    if (S.armR && S.armR.due(dt)) this.drawARM(S.armR, true);
-    if (S.armV && S.armV.due(dt)) this.drawARM(S.armV, false);
-    if (S.unit && S.unit.due(dt)) this.drawUnit(S.unit, scenario);
-    if (S.vitals && S.vitals.due(dt)) this.drawVitals(S.vitals, scenario, S.vitals.every);
-    if (S.meter && S.meter.due(dt)) this.drawMeter(S.meter);
+    const S = this.scr, tick = Math.floor(this.t * 4);
+    if (S.main && S.main.due(dt, tick)) this.drawMain(S.main, scenario);
+    if (S.aux && S.aux.due(dt, tick)) this.drawAux(S.aux, scenario, dosim);
+    if (S.armR && S.armR.due(dt, tick)) this.drawARM(S.armR, true);
+    if (S.armV && S.armV.due(dt, tick)) this.drawARM(S.armV, false);
+    if (S.unit && S.unit.due(dt, tick)) this.drawUnit(S.unit, scenario);
+    if (S.vitals && S.vitals.due(dt, tick)) this.drawVitals(S.vitals, scenario, S.vitals.every);
+    if (S.meter && S.meter.due(dt, tick)) this.drawMeter(S.meter);
     this.renderCCTV(dt);
   }
 
@@ -389,7 +412,7 @@ export class Devices {
       const txt = `${l.ts}  ${l.msg}`;
       g.fillText(txt.length > 96 ? txt.slice(0, 95) + '…' : txt, 30, 316 + i * 23);
     });
-    if (this.errFlash > 0 && Math.floor(this.t * 6) % 2) {
+    if (this.errFlash > 0 && Math.floor(this.t * 4) % 2) {
       g.fillStyle = 'rgba(180,20,20,0.85)'; g.fillRect(W - 300, 70, 282, 64);
       g.fillStyle = '#fff'; g.font = `700 26px ${FONT}`; g.fillText(this.errTxt || 'FAULT', W - 284, 112);
     }
@@ -430,7 +453,7 @@ export class Devices {
   drawARM(s, big) {
     const g = s.g, W = s.w, H = s.h;
     const alarm = this.alarmOn;
-    g.fillStyle = alarm && Math.floor(this.t * 3) % 2 ? '#3a0000' : '#04120a'; g.fillRect(0, 0, W, H);
+    g.fillStyle = alarm && Math.floor(this.t * 2) % 2 ? '#2a0000' : '#04120a'; g.fillRect(0, 0, W, H);
     const [v, u] = fmtDoseRate(this.armRoom * 8.76 * 1.27, this.unit);
     const over = this.armRoom > 9999;
     g.fillStyle = alarm ? '#ff4d3a' : '#5dff9a';
@@ -449,7 +472,7 @@ export class Devices {
     g.fillStyle = '#071017'; g.fillRect(0, 0, W, H);
     const st = this.state.mode;
     const txt = { idle: 'READY', treating: `TREATING  CH01  D${(sc?.source?.dwell ?? 0) + 1}/7`, error: 'ERROR  E-2113', complete: 'COMPLETE', safe: 'SOURCE IN SAFE', container: 'SOURCE NOT IN SAFE' }[st] || st;
-    g.fillStyle = st === 'error' ? (Math.floor(this.t * 3) % 2 ? '#ff4d3a' : '#9a2a20') : '#7cd2ff';
+    g.fillStyle = st === 'error' ? (Math.floor(this.t * 2) % 2 ? '#ff4d3a' : '#9a2a20') : '#7cd2ff';
     g.font = `700 40px ${MONO}`; g.fillText(txt, 16, 70);
     g.font = `500 26px ${MONO}`; g.fillStyle = '#89a4b6';
     g.fillText(`Ir-192 ${(sc ? sc.opts.activity : 10).toFixed(1)}Ci  CRANK ${Math.round((this.crankProgress || 0) * 100)}%`, 16, 130);

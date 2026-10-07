@@ -337,7 +337,7 @@ def build_survey_meter(pos=(-1.15, -3.97, 1.18)):
     g(rbox('sm_cradle_back', (0.16, 0.02, 0.20), (cx, -3.91, shelf_z + 0.09), 'plastic_dark', 0.008))
     g(rbox('sm_cradle_shelf', (0.14, 0.26, 0.02), (cx, -4.03, shelf_z - 0.01), 'plastic_dark', 0.006))
     g(rbox('sm_cradle_lip', (0.14, 0.015, 0.035), (cx, -4.155, shelf_z + 0.005), 'plastic_dark', 0.004))
-    g(decal('sm_label', 0.14, 0.056, (cx, -3.899, shelf_z + 0.26), '-Y', 'sign_meter_label'))
+    g(decal('sm_label', 0.14, 0.056, (cx, -3.901, shelf_z + 0.26), '-Y', 'sign_meter_label'))
     meter.matrix_world = Matrix.Translation((cx, -4.045, shelf_z + 0.0375 + 0.08))
     return meter, g
 
@@ -420,7 +420,7 @@ def build_console():
     hs = [obj_from_bm('hs_body', bm_box(0.05, 0.21, 0.035, c=(2.39, -4.24, 0.817)), 'plastic_dark', DYN, bevel=0.014, bevel_segs=3)]
     handset = merge_dyn('DYN_phone', hs, (2.39, -4.24, 0.817), {'interact': 'grab', 'tool': 'phone'})
     dyn.append(handset)
-    g(decal('ph_list', 0.15, 0.20, (2.95, -3.899, 1.10), '-Y', 'sign_phone_list'))
+    g(decal('ph_list', 0.15, 0.20, (2.95, -3.901, 1.10), '-Y', 'sign_phone_list'))
     # binder / chart
     g(rbox('chart', (0.24, 0.31, 0.03), (-0.35, -4.3, 0.765), 'plastic_blue', 0.004))
     g(rbox('chart_pages', (0.225, 0.30, 0.024), (-0.343, -4.3, 0.765), 'paper', 0.002))
@@ -441,15 +441,15 @@ def build_console():
     g(rbox('arm_box', (0.24, 0.05, 0.16), (-0.98, -3.925, 1.62), 'plastic_light', 0.01))
     scr = decal('SCREEN_arm_remote', 0.17, 0.08, (-0.98, -3.9505, 1.625), '-Y', 'screen', DYN)
     dyn.append(scr)
-    g(decal('arm_lbl', 0.20, 0.053, (-0.98, -3.899, 1.76), '-Y', 'sign_area_monitor'))
+    g(decal('arm_lbl', 0.20, 0.053, (-0.98, -3.901, 1.76), '-Y', 'sign_area_monitor'))
     bcn = obj_from_bm('DYN_beacon_control', bm_lathe([(0, 0), (0.03, 0), (0.03, 0.03), (0.022, 0.05), (0, 0.055)], 24, (-0.98, -3.95, 1.70)), 'beacon_red', DYN)
     dyn.append(bcn)
     g(rbox('radon_box', (0.48, 0.07, 0.14), (-2.1, -3.935, 2.40), 'plastic_dark', 0.01))
     sign = decal('DYN_radon_sign', 0.44, 0.115, (-2.1, -3.9705, 2.40), '-Y', 'sign_lit', DYN)
     dyn.append(sign)
-    g(decal('poster_console', 0.42, 0.656, (2.48, -3.899, 1.48), '-Y', 'sign_procedure_console'))
-    g(decal('room_sign', 0.30, 0.0975, (-3.2, -3.899, 1.58), '-Y', 'sign_room'))
-    g(decal('noentry', 0.30, 0.1125, (-0.95, -3.899, 2.05), '-Y', 'sign_no_entry'))
+    g(decal('poster_console', 0.42, 0.656, (2.48, -3.901, 1.48), '-Y', 'sign_procedure_console'))
+    g(decal('room_sign', 0.30, 0.0975, (-3.2, -3.901, 1.58), '-Y', 'sign_room'))
+    g(decal('noentry', 0.30, 0.1125, (-0.95, -3.901, 2.05), '-Y', 'sign_no_entry'))
     # wall clock (control)
     g(obj_from_bm('clk_rim', bm_lathe([(0.0, 0.0), (0.16, 0.0), (0.165, 0.02), (0.155, 0.04), (0.0, 0.04)], 48, (0.62, -3.94, 2.25), 'Y'), 'plastic_black'))
     g(obj_from_bm('clk_face', bm_plane(0.30, 0.30, (0.62, -3.941, 2.25), '-Y'), 'clock_face', uv='keep', smooth_angle=None))

@@ -256,6 +256,7 @@ export class World {
         o.matrixAutoUpdate = !!(name.startsWith('DYN_') || name.startsWith('SCREEN_'));
         if (lmz) {
           o.material = (mname && mname.startsWith('pt_')) ? this.patientMaterial(mname, lmz) : this.material(mname, zone, { lightmap: true, lmZone: lmz });
+          o.userData.lmZone = lmz; o.userData.zone = zone;
           this.staticMeshes.push(o);
           this.colliders.push(o);
         } else if (name === 'UNLIT') {
@@ -279,6 +280,73 @@ export class World {
     // nested screens (meter display parented to meter)
     this.root.traverse((o) => { if (o.name && o.name.startsWith('SCREEN_')) this.screens[o.name] = o; });
     for (const o of this.staticMeshes) { o.updateMatrixWorld(true); o.matrixAutoUpdate = false; }
+    this.unburyDecals();
+  }
+
+  // Several control-room signs were built 1 mm on the wrong side of the wall face, and the
+  // console button label 5 mm inside its panel. They baked black and only passed the depth test
+  // at some viewing angles (polygon offset), so in a headset they flickered as black shards next
+  // to the screens. Lift each buried decal triangle out of the surface it is stuck in and light
+  // it with that surface's own lightmap texels, so it matches the wall around it.
+  unburyDecals() {
+    const ray = new THREE.Raycaster();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), w = new THREE.Vector3(), hn = new THREE.Vector3();
+    const n3 = new THREE.Matrix3();
+    const isDecal = (o) => o.material && o.material.polygonOffset && this.spec[o.material.name] && this.spec[o.material.name].decal;
+    const decals = this.colliders.filter(isDecal);
+    const solids = this.colliders.filter(o => !isDecal(o));
+    const solidBoxes = solids.map(o => new THREE.Box3().setFromObject(o));
+    for (const o of decals) {
+      const g = o.geometry, pos = g.attributes.position, uv = g.attributes.uv, uv1 = g.attributes.uv1, nrm = g.attributes.normal;
+      if (!uv1 || !uv || pos.count > 256) continue;
+      const box = new THREE.Box3().setFromObject(o).expandByScalar(0.03);
+      const near = solids.filter((s, i) => solidBoxes[i].intersectsBox(box));
+      if (!near.length) continue;
+      const M = o.matrixWorld, Minv = M.clone().invert();
+      const idx = g.index ? Array.from(g.index.array) : [...Array(pos.count).keys()];
+      const probe = (vi, n) => {
+        w.fromBufferAttribute(pos, vi).applyMatrix4(M);
+        ray.set(w.clone().addScaledVector(n, 0.02), n.clone().negate()); ray.far = 0.05;
+        const h = ray.intersectObjects(near, false).find(h => h.face && h.uv1 &&
+          hn.copy(h.face.normal).applyMatrix3(n3.getNormalMatrix(h.object.matrixWorld)).normalize().dot(n) > 0.9);
+        return h ? { h, buried: h.distance < 0.02 - 0.0003 } : null;
+      };
+      const keep = [], lift = [];
+      for (let t = 0; t < idx.length; t += 3) {
+        const ids = [idx[t], idx[t + 1], idx[t + 2]];
+        a.fromBufferAttribute(pos, ids[0]).applyMatrix4(M); b.fromBufferAttribute(pos, ids[1]).applyMatrix4(M); c.fromBufferAttribute(pos, ids[2]).applyMatrix4(M);
+        const n = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).normalize();
+        const res = ids.map(i => probe(i, n));
+        const zone0 = res[0] && res[0].h.object.userData.lmZone;
+        const ok = res.every(r => r && r.h.object.userData.lmZone === zone0);
+        if (ok && res.some(r => r.buried)) lift.push({ ids, res, n }); else keep.push(...ids);
+      }
+      if (!lift.length) continue;
+      // new mesh for the lifted triangles, in the decal's own local space
+      const P = [], N = [], U = [], U1 = [];
+      for (const { ids, res, n } of lift) {
+        ids.forEach((vi, k) => {
+          const p = res[k].h.point.clone().addScaledVector(n, 0.0012).applyMatrix4(Minv);
+          P.push(p.x, p.y, p.z);
+          if (nrm) N.push(nrm.getX(vi), nrm.getY(vi), nrm.getZ(vi));
+          U.push(uv.getX(vi), uv.getY(vi));
+          U1.push(res[k].h.uv1.x, res[k].h.uv1.y);
+        });
+      }
+      const ng = new THREE.BufferGeometry();
+      ng.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+      if (N.length) ng.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); else ng.computeVertexNormals();
+      ng.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+      ng.setAttribute('uv1', new THREE.Float32BufferAttribute(U1, 2));
+      const host = lift[0].res[0].h.object.userData;
+      const mesh = new THREE.Mesh(ng, this.material(o.material.name, o.userData.zone, { lightmap: true, lmZone: host.lmZone }));
+      mesh.name = o.name + '_lifted';
+      mesh.matrix.copy(o.matrix); mesh.matrixAutoUpdate = false;
+      o.parent.add(mesh);
+      mesh.updateMatrixWorld(true);
+      this.staticMeshes.push(mesh);
+      if (keep.length) { g.setIndex(keep); g.computeBoundingSphere(); } else o.visible = false;
+    }
   }
 
   captureProbes() {
