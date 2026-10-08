@@ -33,7 +33,7 @@ const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.03, 4
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
 // ---------------------------------------------------------------- state
-const opts = { scenario: params.get('scenario') || 'random', mode: params.get('mode') || 'guided', activity: parseFloat(params.get('activity') || '10'), unit: 'mR', loco: 'teleport' };
+const opts = { scenario: params.get('scenario') || 'random', mode: params.get('mode') || 'guided', activity: parseFloat(params.get('activity') || '10'), unit: 'mR', loco: params.get('loco') === 'teleport' ? 'teleport' : 'smooth' };
 let world, player, audio, field, dosim, interact, devices, scenario, ui, tube;
 let running = false;
 
@@ -141,6 +141,7 @@ function commonStart() {
   devices.startAudio();
   devices.unit = opts.unit;
   player.loco = opts.loco;
+  player.vignetteOn = params.get('vignette') !== '0';
   $('menu').classList.add('hidden');
   $('debrief').classList.add('hidden');
 }

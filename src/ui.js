@@ -298,6 +298,9 @@ export class UI {
         `Source: Ir-192, ${opts.activity} Ci. Treatment is running. You are the physicist at the console.`,
         'The survey meter is in the cradle left of the console, by the vault door. The emergency container, long forceps and cutters are in the room at the foot of the table.',
         opts.mode === 'guided' ? 'Guided mode: prompts appear at the bottom of your view.' : 'Assessment mode: no prompts. You are scored on the sequence, time and dose.',
+        opts.loco === 'teleport'
+          ? 'To move, push the left stick forward to aim a teleport and let go. Flick the right stick left or right to turn.'
+          : 'To move, push the left stick and you walk where you are looking. Flick the right stick left or right to turn.',
       ];
       let y = 160;
       for (const para of t) { for (const l of wrap(g, para, p.w - 100)) { g.fillText(l, 50, y); y += 42; } y += 16; }

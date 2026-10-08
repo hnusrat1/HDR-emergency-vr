@@ -5,6 +5,8 @@ import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 import { B } from './dose.js';
 
 const EYE = 1.65;
+const WALK = 1.25;     // m/s at full stick
+const DEADZONE = 0.18;
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
 
 // 2D blocking boxes in three plan coords (x, z). Built from Blender min/max.
@@ -48,7 +50,9 @@ export class Player {
     this.mouse = { down: false, clicked: false, released: false, right: false };
     this.locked = false;
     this.mode = 'desktop';
-    this.loco = 'teleport';
+    this.loco = 'smooth';
+    this.vel = new THREE.Vector3();
+    this.vignetteOn = true;
     this.doorOpen = () => false;
     this.hands = [];
     this.onXRStart = null; this.onXREnd = null;
@@ -102,6 +106,25 @@ export class Player {
       if (x > b.x0 - r && x < b.x1 + r && z > b.z0 && z < b.z1) return b;
     }
     return null;
+  }
+
+  // how far (m) the point sits inside the deepest blocker, 0 when clear
+  penetration(x, z, r = 0.22) {
+    let d = 0;
+    for (const b of BLOCKERS.concat(this.extraBlockers)) {
+      d = Math.max(d, Math.min(x - (b.x0 - r), b.x1 + r - x, z - (b.z0 - r), b.z1 + r - z));
+    }
+    if (!this.doorOpen()) {
+      const b = DOOR_GAP;
+      d = Math.max(d, Math.min(x - (b.x0 - r), b.x1 + r - x, z - b.z0, b.z1 - z));
+    }
+    return d;
+  }
+
+  // a step is fine if it ends clear or less deep than it started, so a leaning player can back out
+  canStep(x0, z0, x1, z1) {
+    const p1 = this.penetration(x1, z1);
+    return p1 === 0 || p1 < this.penetration(x0, z0);
   }
 
   moveDesktop(dt) {
@@ -174,6 +197,17 @@ export class Player {
     ring.visible = false;
     this.scene.add(ring);
     this.ring = ring;
+    // comfort vignette: darkens the edge of view while walking
+    const vg = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), new THREE.ShaderMaterial({
+      uniforms: { uS: { value: 0 } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: 'uniform float uS; varying vec2 vUv; void main() { float a = atan(length(vUv - 0.5) * 1.2 / 0.12); gl_FragColor = vec4(0.0, 0.0, 0.0, smoothstep(0.44, 0.87, a) * uS); }',
+      transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    }));
+    vg.position.z = -0.12;
+    vg.renderOrder = 999; vg.frustumCulled = false; vg.visible = false;
+    this.camera.add(vg);
+    this.vignette = vg;
     r.xr.addEventListener('sessionstart', () => {
       this.mode = 'xr';
       this.camera.position.set(0, 0, 0);
@@ -238,37 +272,63 @@ export class Player {
   headDir(out = new THREE.Vector3()) { return this.camera.getWorldDirection(out); }
 
   locomotionXR(dt) {
-    const L = this.hands.find(h => h.handedness === 'left' && h.active && !h.isHand);
-    const R = this.hands.find(h => h.handedness === 'right' && h.active && !h.isHand);
-    // snap turn on right stick
-    if (R && R.axes && R.axes.length >= 4) {
-      const x = R.axes[2];
-      if (Math.abs(x) > 0.7 && !this._snap) { this.snapTurn(x > 0 ? -Math.PI / 6 : Math.PI / 6); this._snap = true; }
-      if (Math.abs(x) < 0.3) this._snap = false;
+    const pad = (hand) => this.hands.find(h => h.handedness === hand && h.active && !h.isHand && h.axes && h.axes.length >= 4);
+    const L = pad('left'), R = pad('right');
+    const rx = R ? R.axes[2] : 0, ry = R ? R.axes[3] : 0;
+    // snap turn on right stick, only when pushed more sideways than forward
+    if (R) {
+      if (Math.abs(rx) > Math.abs(ry) && Math.abs(rx) > 0.7 && !this._snap) { this.snapTurn(rx > 0 ? -Math.PI / 6 : Math.PI / 6); this._snap = true; }
+      if (Math.abs(rx) < 0.3) this._snap = false;
     }
-    if (!L || !L.axes || L.axes.length < 4) { this.arc.visible = this.ring.visible = false; return; }
-    const ax = L.axes[2], ay = L.axes[3];
-    if (this.loco === 'smooth') {
-      if (Math.hypot(ax, ay) > 0.15) {
-        const hd = this.headDir(_v); hd.y = 0; hd.normalize();
-        const right = new THREE.Vector3(-hd.z, 0, hd.x);
-        const sp = 1.4 * dt;
-        const dx = (hd.x * -ay + right.x * ax) * sp, dz = (hd.z * -ay + right.z * ax) * sp;
-        const head = this.headWorld(new THREE.Vector3());
-        if (!this.blocked(head.x + dx, head.z)) this.dolly.position.x += dx;
-        if (!this.blocked(head.x, head.z + dz)) this.dolly.position.z += dz;
-      }
+    if (this.loco === 'teleport') {
+      this.vel.set(0, 0, 0);
+      this.updateVignette(dt, 0);
+      if (!L) { this.arc.visible = this.ring.visible = false; return; }
+      const ay = L.axes[3];
+      // teleport: push stick forward to aim, release to go
+      if (ay < -0.6) {
+        this.aiming = true;
+        this.computeArc(L);
+      } else if (this.aiming && Math.abs(ay) < 0.3) {
+        this.aiming = false;
+        if (this.teleTarget) this.teleportTo(this.teleTarget);
+        this.arc.visible = this.ring.visible = false;
+      } else if (!this.aiming) { this.arc.visible = this.ring.visible = false; }
       return;
     }
-    // teleport: push stick forward to aim, release to go
-    if (ay < -0.6) {
-      this.aiming = true;
-      this.computeArc(L);
-    } else if (this.aiming && Math.abs(ay) < 0.3) {
-      this.aiming = false;
-      if (this.teleTarget) this.teleportTo(this.teleTarget);
-      this.arc.visible = this.ring.visible = false;
-    } else if (!this.aiming) { this.arc.visible = this.ring.visible = false; }
+    this.aiming = false; this.arc.visible = this.ring.visible = false;
+    // smooth: left stick walks; right stick forward/back walks too when it is pushed further
+    let x = L ? L.axes[2] : 0, y = L ? L.axes[3] : 0;
+    if (Math.abs(ry) > Math.abs(rx) && Math.abs(ry) > Math.hypot(x, y)) { x = 0; y = ry; }
+    const mag = Math.hypot(x, y);
+    const target = _v.set(0, 0, 0);
+    if (mag > DEADZONE) {
+      const fwd = this.headDir(new THREE.Vector3()); fwd.y = 0;
+      if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1).applyQuaternion(this.dolly.quaternion).setY(0);
+      fwd.normalize();
+      const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+      const k = WALK * (mag - DEADZONE) / (1 - DEADZONE) / mag;
+      target.copy(fwd).multiplyScalar(-y).addScaledVector(right, x).multiplyScalar(k);
+    }
+    const ease = 1 - Math.exp(-dt * (mag > DEADZONE ? 10 : 14));
+    this.vel.lerp(target, ease);
+    const head = this.headWorld(new THREE.Vector3());
+    const dx = this.vel.x * dt;
+    if (dx) {
+      if (this.canStep(head.x, head.z, head.x + dx, head.z)) { this.dolly.position.x += dx; head.x += dx; } else this.vel.x = 0;
+    }
+    const dz = this.vel.z * dt;
+    if (dz) {
+      if (this.canStep(head.x, head.z, head.x, head.z + dz)) this.dolly.position.z += dz; else this.vel.z = 0;
+    }
+    this.updateVignette(dt, Math.hypot(this.vel.x, this.vel.z));
+  }
+
+  updateVignette(dt, speed) {
+    const u = this.vignette.material.uniforms.uS;
+    const goal = this.mode === 'xr' && this.vignetteOn ? 0.6 * Math.min(1, speed / WALK) : 0;
+    u.value += (goal - u.value) * Math.min(1, dt * 8);
+    this.vignette.visible = u.value >= 0.01;
   }
 
   computeArc(h) {
@@ -315,7 +375,10 @@ export class Player {
 
   update(dt) {
     if (this.mode === 'xr') { this.readXR(); this.locomotionXR(dt); }
-    else if (this.enabled) this.moveDesktop(dt);
+    else {
+      this.updateVignette(dt, 0);
+      if (this.enabled) this.moveDesktop(dt);
+    }
   }
 
   endFrame() {

@@ -30,7 +30,7 @@ These are training approximations. They are not a shielding calculation and not 
 
 ## Controls
 
-**VR**: Grip grabs, cranks, opens the door and pulls the applicator. Press a button by touching it with the yellow dot at the controller tip, or point at it from up to 2.5 m and pull the trigger. A laser and a white ring show which button you are aiming at. Push the left stick forward to aim a teleport; the right stick snap-turns. A/X or the trigger turns the survey meter on and off while you hold it. B/Y opens the pause menu. Hand tracking works too: pinch or make a fist to grab.
+**VR**: Grip grabs, cranks, opens the door and pulls the applicator. Press a button by touching it with the yellow dot at the controller tip, or point at it from up to 2.5 m and pull the trigger. A laser and a white ring show which button you are aiming at. Push the left stick and you walk where you are looking; flick the right stick left or right to turn. The edge of your view darkens while you walk to cut motion sickness; add `?vignette=0` to the URL to turn that off. Teleport is still available under VR movement in the menu. A/X or the trigger turns the survey meter on and off while you hold it. B/Y opens the pause menu. Hand tracking works too: pinch or make a fist to grab.
 
 **Desktop**: Use W A S D to walk and the mouse to look. Left click presses, picks up or uses; hold it to crank, pull or loosen. F turns the meter on or off. G puts down what you are holding. Tab shows the procedure card. Enter ends the drill.
 
